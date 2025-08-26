@@ -119,13 +119,21 @@ def _gdf_to_arrow(gdf):
 
     return base64_string
 
-
 def _normalize_data(data, use_arrow=False):
+    # Caso: DataFrame (Pandas o GeoPandas)
     if isinstance(data, pd.DataFrame):
         if use_arrow:
             return _gdf_to_arrow(data) if isinstance(data, geopandas.GeoDataFrame) else _df_to_arrow(data)
         else:
             return _gdf_to_dict(data) if isinstance(data, geopandas.GeoDataFrame) else _df_to_dict(data)
+
+    if isinstance(data, pyarrow.Table):
+        return _arrow_table_to_base64(data)
+
+    if isinstance(data, (ga.Scalar, ga.Array, ga.ChunkedArray)):  
+        table = pyarrow.Table.from_arrays([data], names=["geometry"])
+        return _arrow_table_to_base64(table)
+
     return data
 
 
@@ -197,22 +205,21 @@ class KeplerGl(widgets.DOMWidget):
 
         super(KeplerGl, self).__init__(**kwargs)
 
-    @validate('data')
-    def _validate_data(self, proposal):
-        '''Validate data input (return from data_to_json)
+  @validate('data')
+  def _validate_data(self, proposal):
+      '''Validate data input (return from data_to_json)'''
 
-        Makes sure data is a dict, and each value should be either a df, a geojson dictionary / string or csv string
-        layers list.
-        '''
+      if not isinstance(proposal.value, dict):
+          raise DataException(f"[data type error]: Expecting a dictionary mapping from data id to value, but got {type(proposal.value)}")
+      else:
+          for key, value in proposal.value.items():
+              if not isinstance(value, (pd.DataFrame, str, dict, pyarrow.Table)):
+                  # eventualmente aggiungi altri tipi Arrow se vuoi supportare geoarrow.*Array
+                  raise DataException(
+                      f"[data type error]: value of {key} should be a DataFrame, a Geojson Dictionary or String, a csv String, or a pyarrow.Table, but got {type(value)}"
+                )
 
-        if not isinstance(proposal.value, dict):
-            raise DataException(f"[data type error]: Expecting a dictionary mapping from id to value, but got {type(proposal.value)}")
-        else:
-            for key, value in proposal.value.items():
-                if not isinstance(value, pd.DataFrame) and not isinstance(value, str) and not isinstance(value, dict):
-                    raise DataException(f"[data type error]: value of {key} should be a DataFrame, a Geojson Dictionary or String, a csv String, but got {type(value)}")
-
-        return proposal.value
+      return proposal.value
 
     def add_data(self, data, name="unnamed", use_arrow=False):
         ''' Send data to Voyager
